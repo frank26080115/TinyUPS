@@ -184,12 +184,12 @@ void poll_status(void)
             if (trusted_full_cnt > 64) // has been full charge for a while
             {
                 // tweak the scaler
-                if (batt_percent < 100.5)
+                if (batt_percent < 1.00)
                 {
                     adc_voltage_scale += 0.001;
                     scaler_dirty = 1;
                 }
-                else if (batt_percent > 102.0)
+                else if (batt_percent > 1.02)
                 {
                     adc_voltage_scale -= 0.001;
                     scaler_dirty = 1;
@@ -241,12 +241,19 @@ void report_fill(void)
 {
     uint16_t tmp;
     uint16_t total = 100; // TODO: current measurement to predict
+    double percent = batt_percent;
+    if (percent > 0.98) {
+    	percent = 1.0;
+    }
+    else if (percent < 0.02) {
+    	percent = 0.0;
+    }
 
     reportBuffer8.report_id = 0x08;
-    tmp = (uint8_t)lround(100 * batt_percent);
+    tmp = (uint8_t)lround(100 * percent);
     reportBuffer8.remaining_capacity = tmp > 255 ? 255 : tmp;
     reportBuffer8.remaining_time_limit = (uint16_t)lround(total);
-    tmp = (uint16_t)lround(total * batt_percent);
+    tmp = (uint16_t)lround(total * percent);
     reportBuffer8.runtime_to_empty = tmp > total ? total : tmp;
 
     reportBuffer11.flags = status_flags;
