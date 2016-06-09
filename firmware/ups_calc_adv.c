@@ -54,13 +54,6 @@ double calc_remaining_percent(double v, double load)
         // TODO
     }
 
-    if (x > 98.0) {
-        return 100.0;
-    }
-    else if (x < 2.0) {
-        return 0.0;
-    }
-
     return x;
 }
 
