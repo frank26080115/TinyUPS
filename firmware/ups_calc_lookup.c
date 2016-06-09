@@ -1,3 +1,13 @@
+/*
+This is an example of a battery state of charge curve
+implemented using a look up table stored in flash memory
+
+The voltage of the battery varies too much between under load annd not underload
+hence this method is not good enough to be used
+
+This bit of code is not really tested.
+*/
+
 #include "ups.h"
 #include <avr/pgmspace.h>
 #include <stdlib.h>
@@ -6,6 +16,7 @@
 #define ADC_TO_VOLTAGE(x) ((x / 65535.0) * 14.0)
 
 PROGMEM const uint16_t batt_curve[] = {
+ // mV   , percent
     65535, 100,
     12800, 100,
     12750, 75,
