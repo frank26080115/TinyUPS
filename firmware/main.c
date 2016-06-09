@@ -1,20 +1,14 @@
 /* Name: main.c
- * Project: hid-mouse, a very simple HID example
- * Author: Christian Starkjohann
- * Creation Date: 2008-04-07
+ * Project: TinyUPS
+ * Author: Frank Zhao
+ * Creation Date: 2016-06-08
  * Tabsize: 4
- * Copyright: (c) 2008 by OBJECTIVE DEVELOPMENT Software GmbH
- * License: GNU GPL v2 (see License.txt), GNU GPL v3 or proprietary (CommercialLicense.txt)
+ * Copyright: (c) 2016 by Frank Zhao
+ * License: GNU GPL v3 (see License.txt)
 **/
 
 /*
-This example should run on most AVRs with only little changes. No special
-hardware resources except INT0 are used. You may have to change usbconfig.h for
-different I/O pins for USB. Please note that USB D+ must be the INT0 pin, or
-at least be connected to INT0 as well.
-
-We use VID/PID 0x046D/0xC00E which is taken from a Logitech mouse. Don't
-publish any hardware using these IDs! This is for demonstration only!
+This is the main file of TinyUPS. It handles most of the USB communication and the scheduling of UPS tasks.
 */
 
 #include <avr/io.h>
@@ -29,20 +23,26 @@ publish any hardware using these IDs! This is for demonstration only!
 
 #include "usbhiddesc.h"
 
-report8_t reportBuffer8;
-report11_t reportBuffer11;
-report7_t reportBuffer7;
+report8_t reportBuffer8; // contains the battery status
+report11_t reportBuffer11; // contains the charger status
+report7_t reportBuffer7; // contains some parameter fields
 report_debug_t reportBufferDebugOut, reportBufferDebugIn;
-static report_byte_t reportBufferByte;
+static report_byte_t reportBufferByte; // buffer space for reports that are a single byte
 
 static uchar    idleRate;   /* repeat rate for keyboards, never used for mice */
 
+/*
+The descriptor includes some reports that are a single byte in length
+in our minimal implementation, they are read-only
+hence we can store them in a lookup table
+If a dynamic implementation is required, this table serves as default values
+*/
 PROGMEM const uint8_t report_lookup_flash[] = {
     0,
     2,    // [ 1] string index for product
     3,    // [ 2] string index for serial number
-    4,    // [ 3] iDeviceChemistry
-    5,    // [ 4] iOEMInformation
+    4,    // [ 3] string index for iDeviceChemistry
+    5,    // [ 4] string index for iOEMInformation
     1,    // [ 5] Rechargable
     2,    // [ 6] CapacityMode, 0 = maH, 1 = mWH, 2 = %, 3 = boolean
     0,    // [ 7] taken care of
@@ -85,9 +85,15 @@ PROGMEM const uint16_t usbDescriptorStringOemInfo[] = {
     USB_CFG_OEM_INFO
 };
 
+/*
+V-USB by default does not handle HID descriptors that are longer than 255 bytes long
+but we can tell it to delegate this under our control instead
+this only works if USB_CFG_LONG_TRANSFERS is enabled
+*/
 USB_PUBLIC usbMsgLen_t usbFunctionDescriptor(struct usbRequest *rq) {
     if((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_STANDARD && rq->bRequest == USBRQ_GET_DESCRIPTOR && rq->wValue.bytes[1] == USBDESCR_HID_REPORT)
     {
+        wdt_reset();
         usbMsgPtr = (usbMsgPtr_t)usbHidReportDescriptor;
         return (usbMsgLen_t)USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH;
     }
@@ -240,7 +246,7 @@ int __attribute__((noreturn)) main(void)
     uchar i;
 
     tmr_t ms = 0;
-    tmr_t tmrTxSts = 0, tmrTxBatt = 0;
+    tmr_t tmrTx = 0;
     tmr_t tmrPollSts = 0, tmrPollBatt = 0;
     #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_TIMING)
     tmr_t msOvf = 0;
@@ -263,21 +269,30 @@ int __attribute__((noreturn)) main(void)
 
     ups_init();
 
-    wdt_enable(WDTO_1S);
+    wdt_enable(WDTO_8S);
+    wdt_reset();
     usbInit();
-    usbDeviceDisconnect();  /* enforce re-enumeration, do this while interrupts are disabled! */
-    i = 0;
-    while(--i){             /* fake USB disconnect for > 250 ms */
-        wdt_reset();
-        _delay_ms(2);
-    }
+    usbDeviceDisconnect();
+    _delay_ms(250); // fake disconnect to force re-enumeration
     usbDeviceConnect();
     sei();
 
+    i = 0;
     for(;;)
     {
-        wdt_reset();
+        //wdt_reset();
+        // watchdog for this implementation only keeps the device alive if USB communication is active
+        // see below, the wdt_reset is called when a message is sent to the host
+        // this is good for a simple implementation, but undesirable for a more advanced implementation
         usbPoll();
+
+        /*
+        timing is not critical at all in this implementation
+        if an implementation requires integration of current load to estimate battery life
+        then you should be using a more capable chip than an ATtiny85
+        which also means you'll use a crystal without requiring SOF calibration
+        and then you can use an internal timer to keep time accurately
+        */
 
         #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_TIMING)
         curSof = usbSofCount; // warning, usbSofCount is volatile, best not to write to it ever
@@ -292,17 +307,21 @@ int __attribute__((noreturn)) main(void)
         #endif
 
         #ifdef ENABLE_UPS_REPORTS
-        if(usbInterruptIsReady() && (ms - tmrTxSts) >= 1000) // ready to send and 500ms have passed
+        if(usbInterruptIsReady() && (ms - tmrTx) >= 500)
         {
-            reportBuffer11.report_id = 11;
-            usbSetInterrupt((void *)&reportBuffer11, sizeof(report11_t));
-            tmrTxSts = ms;
-        }
-        if(usbInterruptIsReady() && (ms - tmrTxBatt) >= 1000) // ready to send and 500ms have passed
-        {
-            reportBuffer8.report_id = 8;
-            usbSetInterrupt((void *)&reportBuffer8, sizeof(report8_t));
-            tmrTxBatt = ms;
+            wdt_reset();
+            if (i == 0)
+            {
+                reportBuffer11.report_id = 11;
+                usbSetInterrupt((void *)&reportBuffer11, sizeof(report11_t));
+            }
+            else
+            {
+                reportBuffer8.report_id = 8;
+                usbSetInterrupt((void *)&reportBuffer8, sizeof(report8_t));
+            }
+            tmrTx = ms;
+            i ^= 1;
         }
         #endif
         if ((ms - tmrPollBatt) >= 10)
