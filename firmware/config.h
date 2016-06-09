@@ -1,11 +1,15 @@
 #ifndef _CONFIG_H_
 #define _CONFIG_H_
 
+// define features here
+
 #define ENABLE_UPS_REPORTS
 #define ENABLE_DEBUG_REPORTS
 #define USE_SOF_FOR_OSC_CAL // use with ATtiny
 #define USE_SOF_FOR_TIMING
 #define USE_AUTO_SCALE
+
+// below are some hardware settings that can be changed without modifying main code
 
 // ADC channels for the battery and status pins
 #define BATT_CHAN 2
@@ -36,6 +40,8 @@
 #define USB_INTR_PENDING        GIFR
 #define USB_INTR_PENDING_BIT    PCIF
 #define USB_INTR_VECTOR         PCINT0_vect
+
+// USB identification parameters below
 
 #define  USB_CFG_VENDOR_ID       0xC0, 0x16 /* = 0x16c0 = 5824 = voti.nl */
 /* USB vendor ID for the device, low byte first. If you have registered your
@@ -91,8 +97,10 @@
 #define USB_CFG_OEM_INFO                'L', 'e', 'a', 'd', ' ', 'A', 'c', 'i', 'd'
 #define USB_CFG_OEM_INFO_LEN            9
 
+// these are read only constants
+
 #define CONSTANT_INPUT_VOLTAGE  0xF0
 #define CONSTANT_OUTPUT_VOLTAGE 0xF0
-#define CONSTANT_OUTPUT_PERCENT_LOAD 50
+#define CONSTANT_OUTPUT_PERCENT_LOAD 50 // TODO: this can be dynamic in a more advanced implementation
 
 #endif
