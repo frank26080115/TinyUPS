@@ -32,9 +32,10 @@ Hardware Requirements
 A rough schematic is provided for the bare minimum implementation. Do not build the circuit verbatim.
 
  * Circuitry consisting of a ATtiny85 microcontroller, the passive components required by V-USB, and components to determine power status
-   * Adafruit's Gemma or Trinket may work
+   * Adafruit's Gemma or Trinket may work (they do not have enough ADC pins available though, it's possible but requires changes)
  * Voltage divider with protection diode that converts 13.5V to 2.56V
  * Cheap lead acid battery charger that uses AC from the wall, has a sufficient rating for the NAS, and features LED indicators
+ * A way of detecting different status of the AC power and from the charger's LEDs
  * Buck-Boost DC/DC converter that supplies a steady 12V to the NAS
 
 License
