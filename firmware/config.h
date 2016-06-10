@@ -7,7 +7,7 @@
 #define ENABLE_DEBUG_REPORTS
 #define USE_SOF_FOR_OSC_CAL // use with ATtiny
 #define USE_SOF_FOR_TIMING
-#define USE_AUTO_SCALE
+//#define USE_AUTO_SCALE // use only if you really don't want to actually calibrate
 
 // below are some hardware settings that can be changed without modifying main code
 
@@ -102,5 +102,6 @@
 #define CONSTANT_INPUT_VOLTAGE  0xF0
 #define CONSTANT_OUTPUT_VOLTAGE 0xF0
 #define CONSTANT_OUTPUT_PERCENT_LOAD 50 // TODO: this can be dynamic in a more advanced implementation
+#define CONSTANT_OUTPUT_BATTERY_LOAD 0.3 // unit is in C, TODO: this can be dynamic in a more advanced implementation
 
 #endif

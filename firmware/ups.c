@@ -7,15 +7,12 @@
 #include <stdlib.h>
 #include <math.h>
 
-#ifdef USE_AUTO_SCALE
-double ups_load_scaler(void);
-double ups_save_scaler(double x);
-#endif
+#define ADC_TO_VOLTAGE(x) ((x / 65535.0) * 14.0)
 
 int8_t adc_to_status(uint16_t adc)
 {
 	#define IS_IN_RANGE(x, y, r) (((x) < ((y) + (r))) && ((x) > ((y) - (r))))
-	if (IS_IN_RANGE(adc, 19133, 1000) || adc < 19682)
+	if (IS_IN_RANGE(adc, 19133, 1000) || adc < 19682) // 19712
 	{
 		// 220K and 100K and 51K
 		return (1 << 2) | (1 << 1) | (1 << 0);
@@ -25,7 +22,7 @@ int8_t adc_to_status(uint16_t adc)
 		// 100K and 51K
 		return (1 << 1) | (1 << 0);
 	}
-	else if (IS_IN_RANGE(adc, 24735, 1000))
+	else if (IS_IN_RANGE(adc, 24735, 1000)) // 25152
 	{
 		// 220K and 51K
 		return (1 << 2) | (1 << 0);
@@ -35,7 +32,7 @@ int8_t adc_to_status(uint16_t adc)
 		// 51K
 		return (1 << 0);
 	}
-	else if (IS_IN_RANGE(adc, 34417, 1000))
+	else if (IS_IN_RANGE(adc, 34417, 1000)) // 34688
 	{
 		// 220K and 100K
 		return (1 << 2) | (1 << 1);
@@ -45,7 +42,7 @@ int8_t adc_to_status(uint16_t adc)
 		// 100K
 		return (1 << 2);
 	}
-	else if (IS_IN_RANGE(adc, 58079, 1000))
+	else if (IS_IN_RANGE(adc, 58079, 2000)) // 57088
 	{
 		// 220K
 		return (1 << 2);
@@ -70,25 +67,44 @@ void poll_batt(void)
     static double filtered = 0;
     #endif
     double analog;
+    double percent, load;
     uint16_t adc;
 
     adc = adc_read(BATT_CHAN);
+
+    load = CONSTANT_OUTPUT_BATTERY_LOAD;
+    if (status_flags == (1 << 4) | (1 << 0)) {
+        load = 0.0;
+    }
 
     reportBufferDebugOut.report_id = 0x20;
     reportBufferDebugOut.data[0] = adc & 0xFF;
     reportBufferDebugOut.data[1] = adc >> 8;
 
     analog = adc;
+
+    if (adc_voltage_scale <= 0)
+    {
+        double inc;
+        for (inc = 0.1; inc <= 100.0; inc += 0.01)
+        {
+            if (calc_remaining_percent(ADC_TO_VOLTAGE(analog * inc)) >= 1.0) {
+                break;
+            }
+        }
+        adc_voltage_scale = inc;
+    }
+
     analog *= adc_voltage_scale;
     #ifdef FILTER_CONST
-    if (filtered == 0) {
+    if (filtered == 0) { // no need for ramp up
         filtered = analog;
     }
     filtered = (filtered * FILTER_CONST) + (analog * (1 - FILTER_CONST));
     analog = filtered;
     #endif
-
-    batt_percent = adc_to_percent(analog);
+    // recharging curve is not implemented, so load cannot be negative
+    percent = calc_remaining_percent(ADC_TO_VOLTAGE(analog), load) / 100.0;
 }
 
 void poll_status(void)
@@ -108,10 +124,6 @@ void poll_status(void)
     int8_t tmpsts, sts = -1;
     int8_t rpt = -1;
     uint16_t adc;
-    #ifdef USE_AUTO_SCALE
-    static uint64_t trusted_full_cnt = 0;
-    static char scaler_dirty = 0;
-    #endif
 
     adc = adc_read(STATUS_CHAN);
 
@@ -180,32 +192,6 @@ void poll_status(void)
         if (sts & (1 << 0))
         {
             rpt = STS_FULL;
-            #ifdef USE_AUTO_SCALE
-            if (trusted_full_cnt > 64) // has been full charge for a while
-            {
-                // tweak the scaler
-                if (batt_percent < 1.00)
-                {
-                    adc_voltage_scale += 0.001;
-                    scaler_dirty = 1;
-                }
-                else if (batt_percent > 1.02)
-                {
-                    adc_voltage_scale -= 0.001;
-                    scaler_dirty = 1;
-                }
-
-                if (trusted_full_cnt == 600) // save only once
-                {
-                    if (scaler_dirty != 0)
-                    {
-                        ups_save_scaler(adc_voltage_scale);
-                        scaler_dirty = 0;
-                    }
-                }
-            }
-            trusted_full_cnt++; // don't really care about overflow, doesn't hurt us
-            #endif
         }
         else if (sts & (1 << 1))
         {
@@ -220,16 +206,10 @@ void poll_status(void)
     if (rpt == STS_DISCHARGING)
     {
         status_flags = (1 << 2);
-        #ifdef USE_AUTO_SCALE
-        trusted_full_cnt = 0;
-        #endif
     }
     else if (rpt == STS_RECHARGING)
     {
         status_flags = (1 << 1) | (1 << 0);
-        #ifdef USE_AUTO_SCALE
-        trusted_full_cnt = 0;
-        #endif
     }
     else if (rpt == STS_FULL)
     {
@@ -243,10 +223,10 @@ void report_fill(void)
     uint16_t total = 100; // TODO: current measurement to predict
     double percent = batt_percent;
     if (percent > 0.98) {
-    	percent = 1.0;
+        percent = 1.0;
     }
     else if (percent < 0.02) {
-    	percent = 0.0;
+        percent = 0.0;
     }
 
     reportBuffer8.report_id = 0x08;
@@ -271,13 +251,9 @@ void report_fill(void)
     reportBufferDebugOut.data[5] = 0;
 }
 
-void ups_init()
+void ups_init(void)
 {
-    #ifdef USE_AUTO_SCALE
     adc_voltage_scale = ups_load_scaler();
-    #else
-    adc_voltage_scale = 1.0;
-    #endif
 
     adc_init();
     poll_batt();
@@ -285,7 +261,6 @@ void ups_init()
     report_fill();
 }
 
-#ifdef USE_AUTO_SCALE
 double ups_load_scaler(void)
 {
     uint8_t tmpbuf[sizeof(double)];
@@ -315,16 +290,12 @@ double ups_load_scaler(void)
     return 1.0; // invalid, so return default
 }
 
-double ups_save_scaler(double x)
+void ups_save_scaler(double x)
 {
     eeprom_write_block((const void*)&x, (void*)8, sizeof(double));
 }
 
-double ups_force_scale(void)
+void ups_force_scale(void)
 {
-    adc_voltage_scale = 1.0 / batt_percent;
-    adc_voltage_scale += 0.001;
-    ups_save_scaler(adc_voltage_scale);
+    adc_voltage_scale = -1; // triggers calculation on next poll
 }
-
-#endif

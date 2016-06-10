@@ -15,8 +15,9 @@ void poll_load(void);
 void report_fill(void);
 void ups_init(void);
 
-double ups_force_scale(void);
-
-extern double adc_to_percent(double);
+double ups_load_scaler(void);
+void ups_save_scaler(double x);
+void ups_force_scale(void);
+extern double calc_remaining_percent(double, double);
 
 #endif

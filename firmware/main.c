@@ -191,7 +191,9 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
             idleRate = rq->wValue.bytes[1];
         }
     }else{
-        /* no vendor specific requests implemented */
+        if (rq->bRequest == 0x01) {
+            ups_force_scale();
+        }
     }
     return 0;   /* default for not implemented requests: return no data back to host */
 }

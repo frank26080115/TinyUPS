@@ -2,8 +2,6 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define ADC_TO_VOLTAGE(x) ((x / 65535.0) * 14.0)
-
 /*
 param v: voltage expressed in volts, range is the typical range for a lead acid battery
 
@@ -52,13 +50,8 @@ double calc_remaining_percent(double v, double load)
     }
     else {
         // TODO
+        // voltage curve for recharging is not implemented
     }
 
     return x;
-}
-
-double adc_to_percent(double x)
-{
-    double v = ADC_TO_VOLTAGE(x);
-    return calc_remaining_percent(v, 0.3) / 100.0;
 }
