@@ -43,7 +43,11 @@ PROGMEM const uint8_t report_lookup_flash[] = {
     2,    // [ 1] string index for product
     3,    // [ 2] string index for serial number
     4,    // [ 3] string index for iDeviceChemistry
+    #ifdef FAKE_CYBERPOWER
+    3,    // [ 4] string index for iOEMInformation
+    #else
     5,    // [ 4] string index for iOEMInformation
+    #endif
     1,    // [ 5] Rechargable
     2,    // [ 6] CapacityMode, 0 = maH, 1 = mWH, 2 = %, 3 = boolean
     0,    // [ 7] taken care of
@@ -84,10 +88,12 @@ PROGMEM const uint16_t usbDescriptorStringDeviceChemistry[] = {
     USB_CFG_DEVICE_CHEMISTRY
 };
 
+#ifndef FAKE_CYBERPOWER
 PROGMEM const uint16_t usbDescriptorStringOemInfo[] = {
     USB_STRING_DESCRIPTOR_HEADER(USB_CFG_OEM_INFO_LEN),
     USB_CFG_OEM_INFO
 };
+#endif
 
 /*
 V-USB by default does not handle HID descriptors that are longer than 255 bytes long
@@ -122,10 +128,12 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
                 len = (usbMsgLen_t)sizeof(usbDescriptorStringDeviceChemistry);
                 memcpy_P((void *)stdreq_buff, (const void *)usbDescriptorStringDeviceChemistry, (size_t)len);
                 return len;
+            #ifndef FAKE_CYBERPOWER
             case 5: // iOEMInformation
                 len = (usbMsgLen_t)sizeof(usbDescriptorStringOemInfo);
                 memcpy_P((void *)stdreq_buff, (const void *)usbDescriptorStringOemInfo, (size_t)len);
                 return len;
+            #endif
         }
     }
     else if((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_STANDARD && rq->bRequest == USBRQ_GET_DESCRIPTOR && rq->wValue.bytes[1] == USBDESCR_HID_REPORT)
@@ -168,11 +176,20 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
                 default:
                     if (rq->wValue.bytes[0] < 32) {
                         reportBufferWord.report_id = rq->wValue.bytes[0];
-                        #ifdef ALLOW_WRITE
-                        reportBufferWord.data = report_lookup[reportBufferWord.report_id];
-                        #else
-                        reportBufferWord.data = pgm_read_byte(&report_lookup_flash[reportBufferWord.report_id]);
-                        #endif
+                        if ((reportBufferWord.report_id == 9 || reportBufferWord.report_id == 10 || reportBufferWord.report_id == 14 ||  reportBufferWord.report_id == 14)
+                            && (reportBuffer11.flags & (1 << 0)) == 0)
+                        {
+                            // if is a input voltage report and AC is gone
+                            reportBufferWord.data = 0; // 0 volts at the input
+                        }
+                        else
+                        {
+                            #ifdef ALLOW_WRITE
+                            reportBufferWord.data = report_lookup[reportBufferWord.report_id];
+                            #else
+                            reportBufferWord.data = pgm_read_byte(&report_lookup_flash[reportBufferWord.report_id]);
+                            #endif
+                        }
                         usbMsgPtr = (usbMsgPtr_t)&reportBufferWord;
                         /* god damn Windows will issue wLength greater than the actual report length
                            so we need some odd logic to limit the response
@@ -347,6 +364,8 @@ int __attribute__((noreturn)) main(void)
         curSof = usbSofCount; // warning, usbSofCount is volatile, best not to write to it ever
         if (prevSof > curSof) {
             msOvf += 256;
+            wdt_reset(); // hmm... the QNAP NAS isn't polling HID endpoint often enough for the watchdog to reset often enough
+            // but hey, at least we are getting SOFs, amirite?
         }
         #if defined(USE_SOF_FOR_SCHEDULING)
         ms = msOvf + curSof;

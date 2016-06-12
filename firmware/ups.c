@@ -133,6 +133,7 @@ void poll_status(void)
     static int8_t prev_sts = -1;
     static uint8_t stable = 0;
     static char charger_intelligent = 0;
+    char isfull = 0;
     int8_t tmpsts, sts = -1;
     int8_t rpt = -1;
     uint16_t adc;
@@ -170,13 +171,18 @@ void poll_status(void)
         charger_intelligent = 1;
     }
 
+    if (batt_percent >= 0.98)
+    {
+        isfull = 1;
+    }
+
     if (sts == 0)
     {
         rpt = STS_DISCHARGING;
     }
     else
     {
-        if (batt_percent >= 0.98)
+        if (isfull != 0)
         {
             rpt = STS_FULL;
         }
@@ -205,6 +211,9 @@ void poll_status(void)
     if (rpt == STS_DISCHARGING)
     {
         status_flags = (1 << 2);
+        if (isfull == 0) {
+            status_flags = (1 << 2) | (1 << 3);
+        }
     }
     else if (rpt == STS_RECHARGING)
     {
@@ -221,7 +230,7 @@ void poll_status(void)
 
     #ifdef ENABLE_TEST_SHUTDOWN
     if (bit_is_clear(PINB, 3)) {
-        status_flags = (1 << 2);
+        status_flags = (1 << 2) | (1 << 3);
     }
     #endif
 }

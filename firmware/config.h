@@ -121,10 +121,15 @@
  * for the serial number.
 **/
 
+#ifdef FAKE_CYBERPOWER
+#define USB_CFG_DEVICE_CHEMISTRY        'P', 'b', 'A', 'c', 'i', 'd'
+#define USB_CFG_DEVICE_CHEMISTRY_LEN    6
+#else
 #define USB_CFG_DEVICE_CHEMISTRY        'L', 'e', 'a', 'd', ' ', 'A', 'c', 'i', 'd'
 #define USB_CFG_DEVICE_CHEMISTRY_LEN    9
-#define USB_CFG_OEM_INFO                'L', 'e', 'a', 'd', ' ', 'A', 'c', 'i', 'd'
-#define USB_CFG_OEM_INFO_LEN            9
+#define USB_CFG_OEM_INFO                'O', 'E', 'M', ' ', 'I', 'n', 'f', 'o'
+#define USB_CFG_OEM_INFO_LEN            8
+#endif
 
 // these are read only constants
 
