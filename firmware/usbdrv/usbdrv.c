@@ -403,6 +403,10 @@ uchar   index = rq->wIndex.bytes[0];
     SWITCH_CASE(USBRQ_SET_INTERFACE)        /* 11 */
         usbResetDataToggling();
         usbResetStall();
+        #if USB_CFG_HAVE_SET_INTERFACE_HOOK
+        len = usbSetInterfaceHook((void*)rq);
+        goto skipMsgPtrAssignment;
+        #endif
 #endif
     SWITCH_DEFAULT                          /* 7=SET_DESCRIPTOR, 12=SYNC_FRAME */
         /* Should we add an optional hook here? */

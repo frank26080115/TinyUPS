@@ -8,8 +8,8 @@ PROGMEM const char usbHidReportDescriptor[] = { /* USB report descriptor, size m
     0x05, 0x84,        // Usage Page (Power Pages) // Power Device
     0x09, 0x04,        // Usage (0x04) // UPS
     0xA1, 0x01,        // Collection (Application)
+    0x09, 0x24,        //   Usage (0x24) // PowerSummary
     0xA1, 0x00,        //   Collection (Physical)
-    0x09, 0x24,        //     Usage (0x24) // PowerSummary
     0x85, 0x01,        //     Report ID (1)
     0x09, 0xFE,        //     Usage (0xFE) // iProduct
     0x75, 0x08,        //     Report Size (8)

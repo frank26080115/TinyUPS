@@ -4,6 +4,7 @@
 
 #include <avr/io.h>
 #include <avr/eeprom.h>
+#include <util/delay.h>
 #include <stdlib.h>
 #include <math.h>
 
@@ -73,7 +74,7 @@ void poll_batt(void)
     adc = adc_read(BATT_CHAN);
 
     load = CONSTANT_OUTPUT_BATTERY_LOAD;
-    if (status_flags == (1 << 4) | (1 << 0)) {
+    if (status_flags == ((1 << 4) | (1 << 0))) {
         load = 0.0;
     }
 
@@ -88,7 +89,7 @@ void poll_batt(void)
         double inc;
         for (inc = 0.1; inc <= 100.0; inc += 0.01)
         {
-            if (calc_remaining_percent(ADC_TO_VOLTAGE(analog * inc)) >= 1.0) {
+            if (calc_remaining_percent(ADC_TO_VOLTAGE(analog * inc), load) >= 1.0) {
                 break;
             }
         }
@@ -105,6 +106,18 @@ void poll_batt(void)
     #endif
     // recharging curve is not implemented, so load cannot be negative
     percent = calc_remaining_percent(ADC_TO_VOLTAGE(analog), load) / 100.0;
+
+    #ifdef FAKE_ALWAYS_FULL
+    percent = 1.0;
+    #endif
+
+    #ifdef ENABLE_TEST_SHUTDOWN
+    if (bit_is_clear(PINB, 3)) {
+        percent = 0.01;
+    }
+    #endif
+
+    batt_percent = percent;
 }
 
 void poll_status(void)
@@ -120,7 +133,6 @@ void poll_status(void)
     static int8_t prev_sts = -1;
     static uint8_t stable = 0;
     static char charger_intelligent = 0;
-    static double max_batt = 0;
     int8_t tmpsts, sts = -1;
     int8_t rpt = -1;
     uint16_t adc;
@@ -158,26 +170,13 @@ void poll_status(void)
         charger_intelligent = 1;
     }
 
-    if (charger_intelligent != 0 && (sts & 0x01) != 0x00)
-    {
-        max_batt = 1.0;
-    }
-    else if (charger_intelligent == 0 && batt_percent > max_batt)
-    {
-        max_batt = batt_percent > 1.0 ? 1.0 : batt_percent;
-    }
-    else if (batt_percent <= 0.9 && sts == 0x00)
-    {
-        max_batt = batt_percent;
-    }
-
     if (sts == 0)
     {
         rpt = STS_DISCHARGING;
     }
     else
     {
-        if (max_batt >= 1.0)
+        if (batt_percent >= 0.98)
         {
             rpt = STS_FULL;
         }
@@ -214,13 +213,23 @@ void poll_status(void)
     else if (rpt == STS_FULL)
     {
         status_flags = (1 << 4) | (1 << 0);
-    } 
+    }
+
+    #ifdef FAKE_ALWAYS_FULL
+    status_flags = (1 << 4) | (1 << 0);
+    #endif
+
+    #ifdef ENABLE_TEST_SHUTDOWN
+    if (bit_is_clear(PINB, 3)) {
+        status_flags = (1 << 2);
+    }
+    #endif
 }
 
 void report_fill(void)
 {
     uint16_t tmp;
-    uint16_t total = 100; // TODO: current measurement to predict
+    uint16_t total = 0x0120; // TODO: current measurement to predict
     double percent = batt_percent;
     if (percent > 0.98) {
         percent = 1.0;
@@ -231,20 +240,36 @@ void report_fill(void)
 
     reportBuffer8.report_id = 0x08;
     tmp = (uint8_t)lround(100 * percent);
-    reportBuffer8.remaining_capacity = tmp > 255 ? 255 : tmp;
+    reportBuffer8.remaining_capacity = tmp > 100 ? 100 : tmp;
+    #ifdef FAKE_CYBERPOWER
+    reportBuffer8.remaining_time_limit = 0x012C;
+    tmp = (uint16_t)lround(((double)0x052E) * percent);
+    reportBuffer8.runtime_to_empty = tmp;
+    #else
     reportBuffer8.remaining_time_limit = (uint16_t)lround(total);
     tmp = (uint16_t)lround(total * percent);
     reportBuffer8.runtime_to_empty = tmp > total ? total : tmp;
+    #endif
 
+    reportBuffer11.report_id = 0x0B;
     reportBuffer11.flags = status_flags;
 
     reportBuffer7.report_id = 0x07;
+    #ifdef FAKE_CYBERPOWER
+    reportBuffer7.design_capacity = 100;
+    reportBuffer7.capacity_granularity_1 = 0x05;
+    reportBuffer7.capacity_granularity_2 = 0x0A;
+    reportBuffer7.warning_capacity_limit = 0x14;
+    reportBuffer7.remaining_time_limit = 0x0A;
+    reportBuffer7.full_charge_capacity = 100;
+    #else
     reportBuffer7.design_capacity = 100;
     reportBuffer7.capacity_granularity_1 = 1;
     reportBuffer7.capacity_granularity_2 = 1;
     reportBuffer7.warning_capacity_limit = 50;
     reportBuffer7.remaining_time_limit = (uint8_t)lround(total);
     reportBuffer7.full_charge_capacity = 100;
+    #endif
 
     reportBufferDebugOut.report_id = 0x20;
     reportBufferDebugOut.data[4] = 0;
@@ -253,20 +278,32 @@ void report_fill(void)
 
 void ups_init(void)
 {
+    uint16_t i;
+
+    #ifdef ENABLE_TEST_SHUTDOWN
+    DDRB &= ~_BV(3);
+    PORTB |= _BV(3);
+    _delay_ms(10);
+    #endif
+
     adc_voltage_scale = ups_load_scaler();
 
     adc_init();
-    poll_batt();
-    poll_status();
-    report_fill();
+    for (i = 0; i < 200 || status_flags == 0; i++) {
+        poll_batt();
+        poll_status();
+        report_fill();
+        _delay_ms(1);
+    }
 }
 
 double ups_load_scaler(void)
 {
     uint8_t tmpbuf[sizeof(double)];
     double* scaler;
-    char allzeros = 1, allones = 1, i;
-    eeprom_read_block(tmpbuf, 8, sizeof(double));
+    char allzeros = 1, allones = 1;
+    int i;
+    eeprom_read_block((void*)tmpbuf, (void*)8, sizeof(double));
 
     // check if data is valid
     for (i = 0; i < sizeof(double); i++)
@@ -283,7 +320,7 @@ double ups_load_scaler(void)
     if (allzeros == 0 && allones != 0)
     {
         scaler = (double*)tmpbuf;
-        if (scaler > 0.5 && scaler < 5) {
+        if ((*scaler) > 0.5 && (*scaler) < 5.0) {
             return (*scaler);
         }
     }

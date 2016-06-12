@@ -41,6 +41,11 @@ typedef struct {
 
 typedef struct {
     uint8_t report_id;
+    uint16_t data;
+} report_word_t;
+
+typedef struct {
+    uint8_t report_id;
     uint8_t data[6];
 } report_debug_t;
 

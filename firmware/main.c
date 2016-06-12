@@ -28,6 +28,7 @@ report11_t reportBuffer11; // contains the charger status
 report7_t reportBuffer7; // contains some parameter fields
 report_debug_t reportBufferDebugOut, reportBufferDebugIn;
 static report_byte_t reportBufferByte; // buffer space for reports that are a single byte
+static report_word_t reportBufferWord; // buffer space for reports that are two bytes
 
 static uchar    idleRate;   /* repeat rate for keyboards, never used for mice */
 
@@ -74,6 +75,9 @@ uint8_t report_lookup[32];
 uint8_t stdreq_buff[128];
 static uint16_t currentPosition, bytesRemaining;
 static char requestedHidDesc = 0;
+static char hasSetInterface = 0;
+static char hasSetIdle = 0;
+static char hasGotten7 = 0;
 
 PROGMEM const uint16_t usbDescriptorStringDeviceChemistry[] = {
     USB_STRING_DESCRIPTOR_HEADER(USB_CFG_DEVICE_CHEMISTRY_LEN),
@@ -105,6 +109,7 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
     usbRequest_t* rq = (void *)data;
 
     requestedHidDesc = 0;
+    wdt_reset();
 
     if((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_STANDARD && rq->bRequest == USBRQ_GET_DESCRIPTOR && rq->wValue.bytes[1] == USBDESCR_STRING)
     {
@@ -141,14 +146,18 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
             // the computer seems to have a habit of requesting reports during enumeration, or during state switching events
             switch(rq->wValue.bytes[0]) { // check report ID
                 case 8:
+                    reportBuffer8.report_id = 8;
                     usbMsgPtr = (usbMsgPtr_t)&reportBuffer8;
                     ret = sizeof(report8_t);
                     break;
                 case 11:
+                    reportBuffer11.report_id = 11;
                     usbMsgPtr = (usbMsgPtr_t)&reportBuffer11;
                     ret = sizeof(report11_t);
                     break;
                 case 7:
+                    hasGotten7 = 1; // the host has gotten report 7 so it understands the units being used
+                    reportBuffer7.report_id = 7;
                     usbMsgPtr = (usbMsgPtr_t)&reportBuffer7;
                     ret = sizeof(report7_t);
                     break;
@@ -157,15 +166,26 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
                     ret = sizeof(report_debug_t);
                     break;
                 default:
-                    reportBufferByte.report_id = rq->wValue.bytes[0];
-                    if (rq->wValue.bytes[0] < 32 && rq->wLength.word <= 2) {
+                    if (rq->wValue.bytes[0] < 32) {
+                        reportBufferWord.report_id = rq->wValue.bytes[0];
                         #ifdef ALLOW_WRITE
-                        reportBufferByte.data = report_lookup[reportBufferByte.report_id];
+                        reportBufferWord.data = report_lookup[reportBufferWord.report_id];
                         #else
-                        reportBufferByte.data = pgm_read_byte(&report_lookup_flash[reportBufferByte.report_id]);
+                        reportBufferWord.data = pgm_read_byte(&report_lookup_flash[reportBufferWord.report_id]);
                         #endif
-                        usbMsgPtr = (usbMsgPtr_t)&reportBufferByte;
-                        ret = sizeof(report_byte_t);
+                        usbMsgPtr = (usbMsgPtr_t)&reportBufferWord;
+                        /* god damn Windows will issue wLength greater than the actual report length
+                           so we need some odd logic to limit the response
+                        */
+                        if (reportBufferWord.report_id == 0x0F) { // this report is actually supposed to be 16 bits
+                            ret = 3;
+                        }
+                        else if (rq->wLength.word <= 3) {
+                            ret = rq->wLength.word;
+                        }
+                        else {
+                            ret = 2;
+                        }
                     }
                     break;
             }
@@ -176,6 +196,7 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
         #ifdef ALLOW_WRITE
         else if(rq->bRequest == USBRQ_HID_SET_REPORT) {
             reportBufferByte.report_id = rq->wValue.bytes[0];
+            reportBufferWord.report_id = rq->wValue.bytes[0];
             currentPosition = 0;                // initialize position inde
             bytesRemaining = rq->wLength.word;  // store the amount of data requested
             if(bytesRemaining > sizeof(stdreq_buff)) // limit to buffer size
@@ -189,6 +210,9 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
         }
         else if(rq->bRequest == USBRQ_HID_SET_IDLE){
             idleRate = rq->wValue.bytes[1];
+            hasSetIdle = 1;
+            return 0; // strangely, the real CP850PFCLCD will stall here, we won't
+            // but it is probably because of their interpretation of the USB spec
         }
     }else{
         if (rq->bRequest == 0x01) {
@@ -196,6 +220,15 @@ usbMsgLen_t usbFunctionSetup(uchar data[8])
         }
     }
     return 0;   /* default for not implemented requests: return no data back to host */
+}
+
+/*
+I had to add this hook to V-USB so we can determine the difference between
+a Windows PC and my QNAP NAS
+*/
+usbMsgLen_t usbSetInterfaceHook(void* rq) {
+    hasSetInterface = 1;
+    return 0;
 }
 
 uint16_t usbFunctionRead(uchar *data, uint16_t len)
@@ -226,8 +259,11 @@ uint8_t usbFunctionWrite(uint8_t *data, uint8_t len)
 
     if (bytesRemaining == 0)
     {
-        if (currentPosition == 1) {
-            report_lookup[reportBufferByte.report_id] = stdreq_buff[0];
+        if (currentPosition == 2) {
+            report_lookup[reportBufferByte.report_id] = stdreq_buff[1];
+        }
+        else if (currentPosition == 3) {
+            memcpy(&reportBufferWord, stdreq_buff, currentPosition);
         }
         else if (reportBufferByte.report_id == 0x07) {
             memcpy(&reportBuffer7, stdreq_buff, currentPosition);
@@ -241,7 +277,7 @@ uint8_t usbFunctionWrite(uint8_t *data, uint8_t len)
 }
 #endif
 
-typedef uint64_t tmr_t;
+typedef uint64_t tmr_t; // wrap around won't cause catastrophic errors, this code can run for years
 
 int __attribute__((noreturn)) main(void)
 {
@@ -250,7 +286,8 @@ int __attribute__((noreturn)) main(void)
     tmr_t ms = 0;
     tmr_t tmrTx = 0;
     tmr_t tmrPollSts = 0, tmrPollBatt = 0;
-    #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_TIMING)
+    #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0
+    tmr_t wdtmr = 0;
     tmr_t msOvf = 0;
     uint8_t prevSof = 0, curSof;
     #endif
@@ -265,17 +302,27 @@ int __attribute__((noreturn)) main(void)
     }
     #endif
 
-    #ifdef ALLOW_WRITE
-    memcpy_P(report_lookup, report_lookup_flash, sizeof(report_lookup_flash));
-    #endif
-
-    ups_init();
-
     wdt_enable(WDTO_8S);
     wdt_reset();
     usbInit();
     usbDeviceDisconnect();
-    _delay_ms(250); // fake disconnect to force re-enumeration
+    #ifdef ALLOW_WRITE
+    memcpy_P(report_lookup, report_lookup_flash, sizeof(report_lookup_flash));
+    #endif
+    #if defined(USE_TIMER_FOR_SCHEDULING)
+    TCCR0A = _BV(WGM01); // CTC mode
+    OCR0A = // about 1ms
+    #ifdef F_CPU == 12000000
+    12
+    #elif F_CPU >= 16000000
+    16
+    #else
+    #error bad F_CPU
+    #endif
+    ; // about 1ms
+    TCCR0B = 0x05; // start timer with div by 1024
+    #endif
+    ups_init(); // this should take more than 200ms
     usbDeviceConnect();
     sei();
 
@@ -283,47 +330,80 @@ int __attribute__((noreturn)) main(void)
     for(;;)
     {
         //wdt_reset();
-        // watchdog for this implementation only keeps the device alive if USB communication is active
-        // see below, the wdt_reset is called when a message is sent to the host
-        // this is good for a simple implementation, but undesirable for a more advanced implementation
+        /* watchdog for this implementation only keeps the device alive if USB communication is active
+           see below, the wdt_reset is called when a message is sent to the host
+           this is good for a simple implementation, but undesirable for a more advanced implementation
+        */
         usbPoll();
 
-        /*
-        timing is not critical at all in this implementation
-        if an implementation requires integration of current load to estimate battery life
-        then you should be using a more capable chip than an ATtiny85
-        which also means you'll use a crystal without requiring SOF calibration
-        and then you can use an internal timer to keep time accurately
+        /* timing is not critical at all in this implementation
+           if an implementation requires integration of current load to estimate battery life
+           then you should be using a more capable chip than an ATtiny85
+           which also means you'll use a crystal without requiring SOF calibration
+           and then you can use an internal timer to keep time accurately
         */
 
-        #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_TIMING)
+        #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0
         curSof = usbSofCount; // warning, usbSofCount is volatile, best not to write to it ever
         if (prevSof > curSof) {
             msOvf += 256;
         }
+        #if defined(USE_SOF_FOR_SCHEDULING)
         ms = msOvf + curSof;
+        #endif
         prevSof = curSof;
-        #else
+        #endif
+        #if defined(USE_TIMER_FOR_SCHEDULING)
+        if (bit_is_set(TIFR, TOV0) || bit_is_set(TIFR, OCF0A)) {
+            TIFR |= TIFR; // clear all flags
+            ms++;
+        }
+        #elif !defined(USE_SOF_FOR_SCHEDULING)
         _delay_us(999);
         ms++;
         #endif
 
         #ifdef ENABLE_UPS_REPORTS
-        if(usbInterruptIsReady() && (ms - tmrTx) >= 500)
+        if (usbInterruptIsReady() && (ms - tmrTx) > 500)
         {
             wdt_reset();
-            if (i == 0)
+            if (hasGotten7 != 0)
             {
-                reportBuffer11.report_id = 11;
-                usbSetInterrupt((void *)&reportBuffer11, sizeof(report11_t));
+                /* on Windows PC, if you start sending data too fast, Windows cannot interpret the data
+                   because report 7 contains data regarding the units being used
+                */
+
+                /* it seems like the difference between a Windows PC and my QNAP NAS is that
+                   on Windows, it sends both report 8 and 11 periodically
+                   on the QNAP NAS, it only send report 11 periodically, while report 8 is only retrieved by SETUP
+                   but this means we must determine which host we are connected to
+                   the only reliable difference in the enumeration sequence seems to be SET_INTERFACE
+                   the QNAP NAS will issue a SET_INTERFACE and the Windows PC will not
+                */
+
+                if (i == 0 || hasSetInterface != 0)
+                {
+                    reportBuffer11.report_id = 11;
+                    usbSetInterrupt((void *)&reportBuffer11, sizeof(report11_t));
+                }
+                else
+                {
+                    reportBuffer8.report_id = 8;
+                    usbSetInterrupt((void *)&reportBuffer8, sizeof(report8_t));
+                }
+                i ^= 1;
             }
             else
             {
-                reportBuffer8.report_id = 8;
-                usbSetInterrupt((void *)&reportBuffer8, sizeof(report8_t));
+                if (ms > 5000)
+                {
+                    hasGotten7 = 1; // give up waiting
+                }
             }
             tmrTx = ms;
-            i ^= 1;
+            #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_SCHEDULING)
+            wdtmr = ms;
+            #endif
         }
         #endif
         if ((ms - tmrPollBatt) >= 10)
@@ -331,12 +411,19 @@ int __attribute__((noreturn)) main(void)
             poll_batt();
             tmrPollBatt = ms;
         }
-        if ((ms - tmrPollSts) >= 250)
+        if ((ms - tmrPollSts) >= 100)
         {
             poll_status();
             tmrPollSts = ms;
         }
         report_fill();
+        #if defined(USB_COUNT_SOF) && USB_COUNT_SOF != 0 && defined(USE_SOF_FOR_SCHEDULING)
+        if ((ms - wdtmr) > 500)
+        {
+            wdt_reset();
+            wdtmr = ms;
+        }
+        #endif
     }
 }
 
@@ -356,6 +443,7 @@ static void calibrateOscillator(void)
         if(x < targetValue)             /* frequency still too low */
             trialValue += step;
         step >>= 1;
+        wdt_reset();
     } while(step > 0);
     /* We have a precision of +/- 1 for optimum OSCCAL here */
     /* now do a neighborhood search for optimum value */
@@ -382,6 +470,7 @@ void usbEventResetReady(void)
     calibrateOscillator();
     sei();
     eeprom_write_byte(0, OSCCAL);   /* store the calibrated value in EEPROM */
+    wdt_reset();
 }
 
 #endif

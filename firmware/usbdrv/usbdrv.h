@@ -390,6 +390,13 @@ extern volatile schar   usbRxLen;
  * first.
 **/
 
+#if USB_CFG_HAVE_SET_INTERFACE_HOOK
+extern usbMsgLen_t usbSetInterfaceHook(void* rq);
+/* This allows the user app to detect when a SET_INTERFACE occurs
+ * which contains info that may be used
+*/
+#endif
+
 #endif  /* __ASSEMBLER__ */
 
 

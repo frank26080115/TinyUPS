@@ -91,7 +91,7 @@ section at the end of this file).
  * (e.g. HID), but never want to send any data. This option saves a couple
  * of bytes in flash memory and the transmit buffers in RAM.
 **/
-#define USB_CFG_INTR_POLL_INTERVAL      250
+#define USB_CFG_INTR_POLL_INTERVAL      0x0A
 /* If you compile a version with endpoint 1 (interrupt-in), this is the poll
  * interval. The value is in milliseconds and must not be less than 10 ms for
  * low speed devices.
@@ -209,6 +209,13 @@ extern void usbEventResetReady(void);
  * may be worth the 32 bytes bigger code size if you transmit lots of data and
  * run the AVR close to its limit.
 **/
+
+#define USB_CFG_HAVE_SET_INTERFACE_HOOK 1
+/* This allows the user app to detect when a SET_INTERFACE occurs
+ * which contains info that may be used
+ * function signature is
+ extern usbMsgLen_t usbSetInterfaceHook(void* rq);
+*/
 
 /* -------------------------- Device Description --------------------------- */
 
